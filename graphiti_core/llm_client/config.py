@@ -42,7 +42,7 @@ class LLMConfig:
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         small_model: str | None = None,
-        debug: bool = False,
+        debug: bool = True,
     ):
         """
         Initialize the LLMConfig with the provided parameters.
