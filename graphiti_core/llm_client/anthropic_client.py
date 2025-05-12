@@ -281,17 +281,27 @@ class AnthropicClient(LLMClient):
                 # Convert Message objects to litellm compatible format
                 litellm_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
                 
+                # Use the appropriate model - Anthropic doesn't have small models in the same way,
+                # but we should still ensure we have a valid model string
+                model_to_use = self.model
+                
+                # Ensure we have a valid model string
+                if not model_to_use:
+                    model_to_use = DEFAULT_MODEL
+                    if self.debug:
+                        logger.warning(f"Using default model for token counting: {model_to_use}")
+                
                 # Use litellm's token_counter for accurate counting
-                input_tokens = token_counter(model=self.model, messages=litellm_messages)
+                input_tokens = token_counter(model=model_to_use, messages=litellm_messages)
                 
                 # Calculate estimated cost
                 prompt_tokens_cost, _ = cost_per_token(
-                    model=self.model,
+                    model=model_to_use,
                     prompt_tokens=input_tokens,
                     completion_tokens=0
                 )
                 
-                logger.info(f"Prompt: '{prompt_first_line}', Tokens: {input_tokens}, Est. Cost: ${prompt_tokens_cost:.6f}")
+                logger.info(f"Prompt: '{prompt_first_line}', Model: {model_to_use}, Tokens: {input_tokens}, Est. Cost: ${prompt_tokens_cost:.6f}")
             except Exception as e:
                 logger.warning(f"Failed to calculate token count: {e}")
 
@@ -312,14 +322,17 @@ class AnthropicClient(LLMClient):
                         prompt_tokens = usage.get('prompt_tokens', 0)
                         completion_tokens = usage.get('completion_tokens', 0)
                         
+                        # Ensure we have a valid model name
+                        model_to_use = self.model or DEFAULT_MODEL
+                        
                         prompt_tokens_cost, completion_tokens_cost = cost_per_token(
-                            model=self.model,
+                            model=model_to_use,
                             prompt_tokens=prompt_tokens,
                             completion_tokens=completion_tokens
                         )
                         
                         final_cost = prompt_tokens_cost + completion_tokens_cost
-                        logger.info(f"Final cost for prompt '{prompt_first_line}': ${final_cost:.6f}")
+                        logger.info(f"Final cost for prompt '{prompt_first_line}': Model: {model_to_use}, ${final_cost:.6f}")
                     except Exception as e:
                         logger.warning(f"Failed to calculate final cost: {e}")
 

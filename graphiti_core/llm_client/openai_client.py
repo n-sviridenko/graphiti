@@ -155,6 +155,13 @@ class OpenAIClient(LLMClient):
                 
                 # Use litellm's token_counter for accurate counting
                 model_to_use = self.small_model if model_size == ModelSize.small else self.model
+                
+                # Make sure we have a valid model string
+                if not model_to_use:
+                    model_to_use = DEFAULT_SMALL_MODEL if model_size == ModelSize.small else DEFAULT_MODEL
+                    if self.debug:
+                        logger.warning(f"Using default model for token counting: {model_to_use}")
+                
                 input_tokens = token_counter(model=model_to_use, messages=litellm_messages)
                 
                 # Calculate estimated cost
@@ -164,7 +171,7 @@ class OpenAIClient(LLMClient):
                     completion_tokens=0
                 )
                 
-                logger.info(f"Prompt: '{prompt_first_line}', Tokens: {input_tokens}, Est. Cost: ${prompt_tokens_cost:.6f}")
+                logger.info(f"Prompt: '{prompt_first_line}', Model: {model_to_use}, Tokens: {input_tokens}, Est. Cost: ${prompt_tokens_cost:.6f}")
             except Exception as e:
                 logger.warning(f"Failed to calculate token count: {e}")
 
@@ -185,6 +192,11 @@ class OpenAIClient(LLMClient):
                     try:
                         usage = response.get('usage', {})
                         model_to_use = self.small_model if model_size == ModelSize.small else self.model
+                        
+                        # Make sure we have a valid model string
+                        if not model_to_use:
+                            model_to_use = DEFAULT_SMALL_MODEL if model_size == ModelSize.small else DEFAULT_MODEL
+                        
                         prompt_tokens = usage.get('prompt_tokens', 0)
                         completion_tokens = usage.get('completion_tokens', 0)
                         
@@ -195,7 +207,7 @@ class OpenAIClient(LLMClient):
                         )
                         
                         final_cost = prompt_tokens_cost + completion_tokens_cost
-                        logger.info(f"Final cost for prompt '{prompt_first_line}': ${final_cost:.6f}")
+                        logger.info(f"Final cost for prompt '{prompt_first_line}': Model: {model_to_use}, ${final_cost:.6f}")
                     except Exception as e:
                         logger.warning(f"Failed to calculate final cost: {e}")
                 
