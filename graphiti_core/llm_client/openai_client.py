@@ -21,6 +21,7 @@ from typing import ClassVar
 import openai
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
+from litellm import cost_per_token, token_counter
 from pydantic import BaseModel
 
 from ..prompts.models import Message
@@ -144,6 +145,29 @@ class OpenAIClient(LLMClient):
         if max_tokens is None:
             max_tokens = self.max_tokens
 
+        # Log the first line of the system message and calculate tokens if debug is enabled
+        if self.debug:
+            prompt_first_line = messages[0].content.split('\n')[0] if messages and messages[0].content else "No prompt"
+            
+            try:
+                # Convert Message objects to litellm compatible format
+                litellm_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+                
+                # Use litellm's token_counter for accurate counting
+                model_to_use = self.small_model if model_size == ModelSize.small else self.model
+                input_tokens = token_counter(model=model_to_use, messages=litellm_messages)
+                
+                # Calculate estimated cost
+                prompt_tokens_cost, _ = cost_per_token(
+                    model=model_to_use,
+                    prompt_tokens=input_tokens,
+                    completion_tokens=0
+                )
+                
+                logger.info(f"Prompt: '{prompt_first_line}', Tokens: {input_tokens}, Est. Cost: ${prompt_tokens_cost:.6f}")
+            except Exception as e:
+                logger.warning(f"Failed to calculate token count: {e}")
+
         retry_count = 0
         last_error = None
 
@@ -155,7 +179,28 @@ class OpenAIClient(LLMClient):
                 response = await self._generate_response(
                     messages, response_model, max_tokens, model_size
                 )
+                
+                # Log completion cost if debug is enabled
+                if self.debug and hasattr(response, 'usage'):
+                    try:
+                        usage = response.get('usage', {})
+                        model_to_use = self.small_model if model_size == ModelSize.small else self.model
+                        prompt_tokens = usage.get('prompt_tokens', 0)
+                        completion_tokens = usage.get('completion_tokens', 0)
+                        
+                        prompt_tokens_cost, completion_tokens_cost = cost_per_token(
+                            model=model_to_use,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens
+                        )
+                        
+                        final_cost = prompt_tokens_cost + completion_tokens_cost
+                        logger.info(f"Final cost for prompt '{prompt_first_line}': ${final_cost:.6f}")
+                    except Exception as e:
+                        logger.warning(f"Failed to calculate final cost: {e}")
+                
                 return response
+                
             except (RateLimitError, RefusalError):
                 # These errors should not trigger retries
                 raise

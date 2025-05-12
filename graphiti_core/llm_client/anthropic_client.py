@@ -24,6 +24,7 @@ from typing import Literal
 import anthropic
 from anthropic import AsyncAnthropic
 from anthropic.types import MessageParam, ToolChoiceParam, ToolUnionParam
+from litellm import cost_per_token, token_counter
 from pydantic import BaseModel, ValidationError
 
 from ..prompts.models import Message
@@ -272,6 +273,28 @@ class AnthropicClient(LLMClient):
         if max_tokens is None:
             max_tokens = self.max_tokens
 
+        # Log the first line of the system message and calculate tokens if debug is enabled
+        if self.debug:
+            prompt_first_line = messages[0].content.split('\n')[0] if messages and messages[0].content else "No prompt"
+            
+            try:
+                # Convert Message objects to litellm compatible format
+                litellm_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+                
+                # Use litellm's token_counter for accurate counting
+                input_tokens = token_counter(model=self.model, messages=litellm_messages)
+                
+                # Calculate estimated cost
+                prompt_tokens_cost, _ = cost_per_token(
+                    model=self.model,
+                    prompt_tokens=input_tokens,
+                    completion_tokens=0
+                )
+                
+                logger.info(f"Prompt: '{prompt_first_line}', Tokens: {input_tokens}, Est. Cost: ${prompt_tokens_cost:.6f}")
+            except Exception as e:
+                logger.warning(f"Failed to calculate token count: {e}")
+
         retry_count = 0
         max_retries = 2
         last_error: Exception | None = None
@@ -281,6 +304,24 @@ class AnthropicClient(LLMClient):
                 response = await self._generate_response(
                     messages, response_model, max_tokens, model_size
                 )
+                
+                # Log completion cost if debug is enabled
+                if self.debug and 'usage' in response:
+                    try:
+                        usage = response.get('usage', {})
+                        prompt_tokens = usage.get('prompt_tokens', 0)
+                        completion_tokens = usage.get('completion_tokens', 0)
+                        
+                        prompt_tokens_cost, completion_tokens_cost = cost_per_token(
+                            model=self.model,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens
+                        )
+                        
+                        final_cost = prompt_tokens_cost + completion_tokens_cost
+                        logger.info(f"Final cost for prompt '{prompt_first_line}': ${final_cost:.6f}")
+                    except Exception as e:
+                        logger.warning(f"Failed to calculate final cost: {e}")
 
                 # If we have a response_model, attempt to validate the response
                 if response_model is not None:
