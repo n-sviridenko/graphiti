@@ -22,6 +22,7 @@ from abc import ABC, abstractmethod
 
 import httpx
 from diskcache import Cache
+from litellm import cost_per_token, token_counter
 from pydantic import BaseModel
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
@@ -60,6 +61,7 @@ class LLMClient(ABC):
         self.max_tokens = config.max_tokens
         self.cache_enabled = cache
         self.cache_dir = None
+        self.debug = config.debug
 
         # Only create the cache directory if caching is enabled
         if self.cache_enabled:
@@ -147,12 +149,39 @@ class LLMClient(ABC):
         # Add multilingual extraction instructions
         messages[0].content += MULTILINGUAL_EXTRACTION_RESPONSES
 
+        # Log the first line of the system message
+        prompt_first_line = messages[0].content.split('\n')[0] if messages and messages[0].content else "No prompt"
+        
+        # Calculate token count and cost estimate before making the API call
+        input_tokens = 0
+        try:
+            # Convert Message objects to litellm compatible format
+            litellm_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+            
+            # Use litellm's token_counter for more accurate and consistent counting
+            input_tokens = token_counter(model=self.model, messages=litellm_messages)
+            
+            # Use litellm for accurate cost calculation
+            prompt_tokens_cost, _ = cost_per_token(
+                model=self.model,
+                prompt_tokens=input_tokens,
+                completion_tokens=0
+            )
+            
+            estimated_cost = prompt_tokens_cost
+            if self.debug:
+                logger.info(f"Prompt: '{prompt_first_line}', Tokens: {input_tokens}, Est. Cost: ${estimated_cost:.6f}")
+        except Exception as e:
+            if self.debug:
+                logger.warning(f"Failed to calculate token count: {e}")
+
         if self.cache_enabled and self.cache_dir is not None:
             cache_key = self._get_cache_key(messages)
 
             cached_response = self.cache_dir.get(cache_key)
             if cached_response is not None:
-                logger.debug(f'Cache hit for {cache_key}')
+                if self.debug:
+                    logger.debug(f'Cache hit for {cache_key}')
                 return cached_response
 
         for message in messages:
@@ -161,6 +190,24 @@ class LLMClient(ABC):
         response = await self._generate_response_with_retry(
             messages, response_model, max_tokens, model_size
         )
+
+        # Calculate final cost with completion tokens if available in response
+        try:
+            if 'usage' in response:
+                usage = response['usage']
+                completion_tokens = usage.get('completion_tokens', 0)
+                prompt_tokens_cost, completion_tokens_cost = cost_per_token(
+                    model=self.model,
+                    prompt_tokens=input_tokens,
+                    completion_tokens=completion_tokens
+                )
+                
+                final_cost = prompt_tokens_cost + completion_tokens_cost
+                if self.debug:
+                    logger.info(f"Final cost for prompt '{prompt_first_line}': ${final_cost:.6f}")
+        except Exception as e:
+            if self.debug:
+                logger.warning(f"Failed to calculate final cost: {e}")
 
         if self.cache_enabled and self.cache_dir is not None:
             cache_key = self._get_cache_key(messages)
